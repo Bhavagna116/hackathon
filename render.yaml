@@ -1,0 +1,21 @@
+# Blueprint: deploy from repo root. In Render: New → Blueprint → connect this repo.
+services:
+  - type: web
+    name: election-patrol-api
+    runtime: python
+    rootDir: election_patrol_backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "1440"
+      - key: FIREBASE_CREDENTIALS_PATH
+        value: /etc/secrets/firebase_credentials.json

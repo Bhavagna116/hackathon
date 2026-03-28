@@ -1,0 +1,40 @@
+# Secrets & local env (never commit)
+**/.env
+**/.env.local
+**/.env.*.local
+**/firebase_credentials.json
+**/*-firebase-adminsdk-*.json
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+
+# Node / Vite
+node_modules/
+**/node_modules/
+**/dist/
+
+# Flutter / Dart
+.dart_tool/
+**/build/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+
+# Android
+**/local.properties
+**/key.properties
+*.jks
+*.keystore
+
+# IDE & OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

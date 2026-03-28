@@ -1,0 +1,51 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+@keyframes nav-alert-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.stat-number {
+  transition: all 0.3s ease;
+}
+
+.nav-alert-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff1744;
+  flex-shrink: 0;
+  animation: nav-alert-blink 1s step-end infinite;
+  box-shadow: 0 0 6px rgba(255, 23, 68, 0.8);
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  min-height: 100vh;
+}
+
+#root {
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+}

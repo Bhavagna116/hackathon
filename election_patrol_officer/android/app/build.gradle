@@ -1,0 +1,35 @@
+plugins {
+    id "com.android.application"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+// TODO: Add google-services.json from Firebase Console (and apply the Google Services Gradle plugin) for FCM on Android.
+
+android {
+    namespace "com.example.election_patrol_officer"
+    compileSdk flutter.compileSdkVersion
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    defaultConfig {
+        applicationId "com.example.election_patrol_officer"
+        minSdkVersion 21
+        targetSdkVersion flutter.targetSdkVersion
+        versionCode flutter.versionCode
+        versionName flutter.versionName
+        manifestPlaceholders = [GOOGLE_MAP_API_KEY: project.findProperty("GOOGLE_MAP_API_KEY") ?: ""]
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.debug
+        }
+    }
+}
+
+flutter {
+    source "../.."
+}
