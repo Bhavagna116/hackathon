@@ -426,6 +426,109 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
                       const SizedBox(height: 32),
 
+                      // --- REAL-TIME EMERGENCY ALERT (DYNAMIC) ---
+                      StreamBuilder<Map<String, dynamic>>(
+                        stream: _location.alertStream,
+                        builder: (context, snapshot) {
+                          if (!snapshot.hasData) return const SizedBox.shrink();
+                          
+                          final alertData = snapshot.data!;
+                          final alert = IncidentAlert.fromJson(alertData);
+                          
+                          // Also record in NotificationService for history
+                          NotificationService.handleSocketAlert(alertData);
+
+                          return Column(
+                            key: ValueKey(alert.incidentId),
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(2),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade600,
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.red.withOpacity(0.35),
+                                      blurRadius: 15,
+                                      offset: const Offset(0, 5),
+                                    ),
+                                  ],
+                                ),
+                                child: Container(
+                                  padding: const EdgeInsets.all(16),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          Icon(Icons.warning_amber_rounded, color: Colors.red.shade700, size: 28),
+                                          const SizedBox(width: 12),
+                                          const Expanded(
+                                            child: Text(
+                                              'ACTIVE EMERGENCY ALERT',
+                                              style: TextStyle(
+                                                color: Colors.red,
+                                                fontWeight: FontWeight.w900,
+                                                letterSpacing: 0.8,
+                                                fontSize: 15,
+                                              ),
+                                            ),
+                                          ),
+                                          IconButton(
+                                            icon: const Icon(Icons.close_rounded, size: 20),
+                                            onPressed: () {
+                                              // Simple way to "dismiss" the current UI view
+                                              if (mounted) setState(() {}); 
+                                            },
+                                          ),
+                                        ],
+                                      ),
+                                      const Divider(),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        alert.incidentType.toUpperCase().replaceAll('_', ' '),
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        alert.message.isNotEmpty ? alert.message : 'You have been assigned to this emergency incident. Please respond immediately.',
+                                        style: TextStyle(color: Colors.grey.shade800, fontSize: 15, height: 1.4),
+                                      ),
+                                      const SizedBox(height: 18),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        height: 48,
+                                        child: FilledButton.icon(
+                                          onPressed: () {
+                                            Navigator.of(context).push<void>(
+                                              MaterialPageRoute<void>(
+                                                builder: (BuildContext _) =>
+                                                    AlertScreen(alert: alert, api: _api, location: _location),
+                                              ),
+                                            );
+                                          },
+                                          style: FilledButton.styleFrom(
+                                            backgroundColor: Colors.red.shade700,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                          ),
+                                          icon: const Icon(Icons.map_rounded),
+                                          label: const Text('RESPOND ON MAP', style: TextStyle(fontWeight: FontWeight.bold)),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 32),
+                            ],
+                          );
+                        },
+                      ),
+
                       // --- RECENT ALERTS ---
                       Container(
                         alignment: Alignment.centerLeft,

@@ -1,5 +1,6 @@
-# Blueprint: deploy from repo root. In Render: New → Blueprint → connect this repo.
+# Blueprint: Full Election Patrol System Deployment
 services:
+  # 1. Backend API (Python/FastAPI)
   - type: web
     name: election-patrol-api
     runtime: python
@@ -7,15 +8,49 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.9
       - key: MONGODB_URI
-        sync: false
+        sync: false # Set manually in Render dashboard
       - key: MONGODB_DB_NAME
-        sync: false
+        value: election_patrol
       - key: JWT_SECRET
-        sync: false
+        sync: false # Set manually in Render dashboard
       - key: JWT_ALGORITHM
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "1440"
       - key: FIREBASE_CREDENTIALS_PATH
         value: /etc/secrets/firebase_credentials.json
+
+  # 2. Socket Server (Node.js)
+  - type: web
+    name: election-patrol-sockets
+    runtime: node
+    rootDir: election_patrol_socket_server
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: MONGODB_URI
+        fromService:
+          type: web
+          name: election-patrol-api
+          envVar: MONGODB_URI
+
+  # 3. Dashboard Frontend (Static Site)
+  - type: static
+    name: election-patrol-dashboard
+    rootDir: election_patrol_dashboard
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: election-patrol-api
+          envVar: RENDER_EXTERNAL_URL
+      - key: VITE_SOCKET_URL
+        fromService:
+          type: web
+          name: election-patrol-sockets
+          envVar: RENDER_EXTERNAL_URL

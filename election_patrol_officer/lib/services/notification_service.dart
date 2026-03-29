@@ -89,6 +89,15 @@ class NotificationService {
     unreadCount.value = unreadCount.value + 1;
   }
 
+  static void handleSocketAlert(Map<String, dynamic> data) {
+    debugPrint("Processing socket alert: $data");
+    final alert = _tryParseAlert(data);
+    if (alert == null) return;
+    _recordAlert(alert);
+    // Note: We deliberately skip the startAlarm() and _showForegroundDialog() 
+    // for socket alerts as requested by the user to avoid noise/modals.
+  }
+
   static IncidentAlert? _tryParseAlert(Map<String, dynamic> data) {
     try {
       final alert = IncidentAlert.fromJson(Map<String, dynamic>.from(data));

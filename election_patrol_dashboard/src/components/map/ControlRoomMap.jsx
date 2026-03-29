@@ -13,6 +13,7 @@ import { createIncident } from "../../api/incidentsApi";
 import { getNearbyOfficers } from "../../api/officersApi";
 import { useAuthStore } from "../../store/authStore";
 import { useDashboardStore } from "../../store/dashboardStore";
+import { useNodeSocket } from "../../hooks/useNodeSocket";
 import { GOOGLE_MAPS_API_KEY } from "../../utils/constants";
 
 const DEFAULT_CENTER = { lat: 20.5937, lng: 78.9629 };
@@ -497,6 +498,8 @@ export default function ControlRoomMap() {
     }
   }
 
+  const { emitDispatch } = useNodeSocket();
+
   async function handleAlertBooth(booth) {
     if (isAlerting) return;
     setIsAlerting(true);
@@ -518,6 +521,24 @@ export default function ControlRoomMap() {
         setIsAlerting(false);
         setActive(null);
         playAlertSound();
+
+        const assignedIds = Array.isArray(response.data?.assigned_officers) 
+          ? response.data.assigned_officers 
+          : [];
+        const incidentId = response.data?.incident_id || `alert-${Date.now()}`;
+        
+        // BROADCAST VIA SOCKETS IMMEDIATELY
+        assignedIds.forEach(officerId => {
+          emitDispatch(officerId, {
+            incident_id: incidentId,
+            incident_type: "booth_capture",
+            latitude: booth.lat,
+            longitude: booth.lng,
+            severity: "high",
+            reported_by: reporter,
+            message: `Emergency at ${booth.name}! Booth capture reported.`
+          });
+        });
 
 
         const assignedDetails = Array.isArray(response.data?.assigned_officer_details)

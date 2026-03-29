@@ -16,12 +16,19 @@ async def get_current_officer(token: str = Depends(oauth2_scheme)) -> dict[str, 
     if unique_id is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
-    await ensure_db_connected()
-    if db.officers_auth_collection is None:
-        raise HTTPException(status_code=503, detail="Database not available")
+    if payload.get("rank") == "Admin":
+        return payload
 
-    doc = await db.officers_auth_collection.find_one({"unique_id": unique_id})
+    await ensure_db_connected()
+    
+    doc = None
+    if db.officers_auth_collection is not None:
+        doc = await db.officers_auth_collection.find_one({"unique_id": unique_id})
+    
+    if doc is None and db.admins_collection is not None:
+        doc = await db.admins_collection.find_one({"unique_id": unique_id})
+
     if doc is None:
-        raise HTTPException(status_code=401, detail="Officer not found")
+        raise HTTPException(status_code=401, detail="Officer or Admin not found")
 
     return dict(doc)

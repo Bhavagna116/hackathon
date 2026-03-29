@@ -72,45 +72,13 @@ async def list_all_incidents() -> list[IncidentResponse]:
     return out
 
 
-@router.post("/create")
-async def create_incident(
-    body: IncidentCreate,
-    background_tasks: BackgroundTasks,
-    # Admin or authorized officer check
-    _current: dict[str, Any] = Depends(get_current_officer),
-) -> dict[str, Any]:
-    await db.ensure_db_connected()
-    if db.incidents_collection is None or db.officer_tracking_collection is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    if body.incident_type not in _ALLOWED_INCIDENT_TYPES:
-        # Fallback for dynamic types from dashboard
-        pass
-
-    incident_id = str(uuid.uuid4())
-    created_at = datetime.utcnow()
-    doc: dict[str, Any] = {
-        "incident_id": incident_id,
-        "incident_type": body.incident_type,
-        "latitude": body.latitude,
-        "longitude": body.longitude,
-        "severity": body.severity,
-        "status": "pending",
-        "reported_by": body.reported_by,
-        "assigned_officers": [],
-        "created_at": created_at,
-        "resolved_at": None,
-    }
-
-    await db.incidents_collection.insert_one(doc)
-
-    warning: str | None = None
-    fcm_tokens: list[str] = []
-    nearby_officers: list[dict[str, Any]] = []
-    assigned_details: list[dict[str, Any]] = []
-
+async def _assign_and_dispatch_incident(incident_id: str, incident_doc: dict[str, Any], body_data: Any):
+    """Background task to find officers and dispatch alerts without blocking API."""
     try:
-        # Join tracking and auth to find best candidates
+        await db.ensure_db_connected()
+        if db.officer_tracking_collection is None:
+            return
+
         pipeline = [
             {
                 "$match": {
@@ -133,95 +101,110 @@ async def create_incident(
         cursor = db.officer_tracking_collection.aggregate(pipeline)
         candidates = []
         async for raw in cursor:
-            dist = haversine_km(body.latitude, body.longitude, float(raw["last_latitude"]), float(raw["last_longitude"]))
+            dist = haversine_km(body_data.latitude, body_data.longitude, float(raw["last_latitude"]), float(raw["last_longitude"]))
             candidates.append({
                 "unique_id": raw["unique_id"],
                 "fcm_token": raw["auth"].get("fcm_token"),
                 "dist": dist,
                 "username": raw["auth"].get("username") or f"Officer {raw['unique_id'][:6]}",
-                "rank": raw["auth"].get("rank") or "Patrol",
                 "email": raw["auth"].get("email"),
-                "mobile_number": raw["auth"].get("mobile_number"),
-
-                "availability_status": raw.get("availability_status", "free"),
             })
-        
-        print(f"DEBUG: Found {len(candidates)} candidates.")
-
-
 
         if not candidates:
-            warning = "No free officers currently online in the area."
-        else:
-            candidates.sort(key=lambda x: x["dist"])
-            nearby_officers = [
-                {
-                    "unique_id": o["unique_id"],
-                    "username": o["username"],
-                    "rank": o["rank"],
-                    "mobile_number": o["mobile_number"],
-                    "availability_status": o["availability_status"],
-                    "distance_km": round(o["dist"], 2),
-                }
-                for o in candidates[:5]
-            ]
-            top_officers = candidates[:2] # Assign 2 officers
-            assigned_ids = [o["unique_id"] for o in top_officers]
-            assigned_details = [
-                {
-                    "unique_id": o["unique_id"],
-                    "username": o["username"],
-                    "rank": o["rank"],
-                    "mobile_number": o["mobile_number"],
-                    "availability_status": "assigned",
-                    "distance_km": round(o["dist"], 2),
-                }
-                for o in top_officers
-            ]
+            print(f"DEBUG: No free officers for incident {incident_id}")
+            return
 
-            for o in top_officers:
-                uid = o["unique_id"]
-                # Mark as assigned so they don't get double-booked
-                await db.officer_tracking_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "assigned"}})
-                if db.officers_auth_collection is not None:
-                    await db.officers_auth_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "assigned"}})
-                
-                if o.get("fcm_token"):
-                    fcm_tokens.append(o["fcm_token"])
+        candidates.sort(key=lambda x: x["dist"])
+        top_officers = candidates[:2]
+        assigned_ids = [o["unique_id"] for o in top_officers]
+        
+        # Mark as assigned
+        for o in top_officers:
+            uid = o["unique_id"]
+            await db.officer_tracking_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "assigned"}})
+            if db.officers_auth_collection is not None:
+                await db.officers_auth_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "assigned"}})
+        
+        # Update incident record
+        await db.incidents_collection.update_one(
+            {"incident_id": incident_id},
+            {"$set": {"assigned_officers": assigned_ids}}
+        )
 
-            await db.incidents_collection.update_one(
-                {"incident_id": incident_id},
-                {"$set": {"assigned_officers": assigned_ids}}
+        # Build payload
+        incident_doc["assigned_officers"] = assigned_ids
+        payload = _incident_dict_for_fcm(incident_doc)
+        
+        # Dispatch FCM
+        fcm_tokens = [o["fcm_token"] for o in top_officers if o.get("fcm_token")]
+        if fcm_tokens:
+            await _schedule_fcm_deliveries(fcm_tokens, payload)
+
+        # Dispatch Emails
+        emails = [o["email"] for o in candidates[:5] if o.get("email")]
+        if emails:
+            await send_alert_email(
+                emails, 
+                body_data.incident_type, 
+                body_data.latitude, 
+                body_data.longitude, 
+                body_data.severity, 
+                body_data.reported_by
             )
 
-            doc["assigned_officers"] = assigned_ids
-            payload = _incident_dict_for_fcm(doc)
-            
-            # Email nearby officers too
-            emails = [o["email"] for o in candidates[:5] if o.get("email")]
-            print(f"DEBUG: Emails to notify ({len(emails)}): {emails}")
-            
-            background_tasks.add_task(_schedule_fcm_deliveries, fcm_tokens, payload)
-            if emails:
-                background_tasks.add_task(send_alert_email, emails, body.incident_type, body.latitude, body.longitude, body.severity, body.reported_by)
-            else:
-                print("DEBUG: No officer emails found. Skipping email task.")
+        # TRIGGER SOCKET DISPATCH (REAL-TIME ALERT)
+        import os
+        import httpx
+        SOCKET_URL = os.getenv("SOCKET_SERVER_URL", "http://localhost:3000")
+        async with httpx.AsyncClient() as client:
+            for uid in assigned_ids:
+                try:
+                    await client.post(f"{SOCKET_URL}/dispatch-alert", json={
+                        "targetUserId": uid,
+                        "incident": payload
+                    })
+                    print(f"DEBUG: Socket alert dispatched to {uid}")
+                except Exception as e:
+                    print(f"DEBUG: Socket dispatch error for {uid}: {e}")
 
-
-            
     except Exception as e:
-        print(f"DEBUG: Incident optimization failure: {e}")
-        warning = "Incident recorded but automatic assignment failed."
+        print(f"DEBUG: Background dispatch failure: {e}")
 
-    final = await db.incidents_collection.find_one({"incident_id": incident_id})
-    out = _doc_to_incident_response(dict(final or doc)).model_dump()
-    out["nearby_officers"] = nearby_officers
-    out["assigned_officer_details"] = assigned_details
-    out["emailed_to"] = [o["email"] for o in candidates[:5] if o.get("email")]
-    if warning:
-        out["warning"] = warning
-    return out
 
+@router.post("/create")
+async def create_incident(
+    body: IncidentCreate,
+    background_tasks: BackgroundTasks,
+    _current: dict[str, Any] = Depends(get_current_officer),
+) -> dict[str, Any]:
+    await db.ensure_db_connected()
+    if db.incidents_collection is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    incident_id = str(uuid.uuid4())
+    created_at = datetime.utcnow()
+    
+    doc: dict[str, Any] = {
+        "incident_id": incident_id,
+        "incident_type": body.incident_type,
+        "latitude": body.latitude,
+        "longitude": body.longitude,
+        "severity": body.severity,
+        "status": "pending",
+        "reported_by": body.reported_by,
+        "assigned_officers": [],
+        "created_at": created_at,
+        "resolved_at": None,
+    }
+
+    # 1. Insert into DB immediately (Fast)
+    await db.incidents_collection.insert_one(doc)
+
+    # 2. Assign and Dispatch in Background (Prevents dashboard hang)
+    background_tasks.add_task(_assign_and_dispatch_incident, incident_id, doc, body)
+
+    # 3. Return response immediately
+    return _doc_to_incident_response(doc).model_dump()
 
 
 @router.post("/respond")

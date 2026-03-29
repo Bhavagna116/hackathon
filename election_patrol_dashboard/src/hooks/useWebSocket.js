@@ -98,7 +98,7 @@ export function useWebSocket() {
     function connect() {
       clearReconnect();
 
-      const url = `${WS_URL}/ws/dashboard`;
+      const url = `${WS_URL}/websocket/dashboard`;
 
       let ws;
       try {

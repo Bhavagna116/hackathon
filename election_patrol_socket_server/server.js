@@ -13,16 +13,26 @@ app.use(cors());
 
 const server = http.createServer(app);
 
-// We explicitly bypass SRV (mongodb+srv) by formulating the direct standard connection string
-// This guarantees Node.js skips the extremely buggy Windows DNS SRV polling mechanism
-const MONGO_URI = "mongodb://aravindkumar23567_db_user:ydRKwgtEaoVsJ8Wh@ac-zogpmy1-shard-00-00.murxn24.mongodb.net:27017,ac-zogpmy1-shard-00-01.murxn24.mongodb.net:27017,ac-zogpmy1-shard-00-02.murxn24.mongodb.net:27017/election_patrol?ssl=true&replicaSet=atlas-cow1gf-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0";
+app.use(express.json());
+
+// INTERNAL ENDPOINT: Allow Python backend to trigger socket dispatches
+app.post("/dispatch-alert", (req, res) => {
+  const { targetUserId, incident } = req.body;
+  if (!targetUserId || !incident) {
+    return res.status(400).json({ error: "Missing targetUserId or incident" });
+  }
+  console.log(`[HTTP Dispatch] Alerting user ${targetUserId}`);
+  io.to(targetUserId).emit("incidentAlert", incident);
+  res.json({ status: "success" });
+});
+
+const LOCAL_MONGO_URI = "mongodb://aravindkumar23567_db_user:ydRKwgtEaoVsJ8Wh@ac-zogpmy1-shard-00-00.murxn24.mongodb.net:27017,ac-zogpmy1-shard-00-01.murxn24.mongodb.net:27017,ac-zogpmy1-shard-00-02.murxn24.mongodb.net:27017/election_patrol?ssl=true&replicaSet=atlas-cow1gf-shard-0&authSource=admin&retryWrites=true&w=majority&appName=Cluster0";
+const MONGO_URI = process.env.MONGODB_URI || LOCAL_MONGO_URI;
 
 mongoose.connect(MONGO_URI)
   .then(() => console.log("Connected to MongoDB via Mongoose"))
   .catch(err => console.error("MongoDB connection error:", err));
 
-// Define schema matching the new localized tracking collection
-// strict: false allows Mongoose to update specific fields without wiping other schema data
 const officerSchema = new mongoose.Schema({
   unique_id: { type: String, unique: true },
   last_latitude: Number,
@@ -31,7 +41,6 @@ const officerSchema = new mongoose.Schema({
   last_updated: Date,
 }, { strict: false });
 
-// Target strictly the tracking collection managed by NodeJS!
 const Officer = mongoose.model("Officer", officerSchema, "officer_tracking");
 
 const io = new Server(server, {
@@ -41,9 +50,14 @@ const io = new Server(server, {
 io.on("connection", (socket) => {
   console.log("User connected to socket:", socket.id);
 
+  socket.on("join", (userId) => {
+    socket.join(userId);
+    console.log(`User ${userId} joined their private room: ${userId}`);
+  });
+
   socket.on("sendLocation", async (data) => {
-    // Expected incoming data: userId (which is unique_id), latitude, longitude, availability_status, timestamp
     console.log("Receiving sendLocation trace:", data.userId, data.latitude, data.longitude, data.availability_status);
+    socket.join(data.userId); 
     try {
       const broadcastPayload = {
         unique_id: data.userId,
@@ -52,10 +66,8 @@ io.on("connection", (socket) => {
         availability_status: data.availability_status || "free",
         timestamp: data.timestamp || new Date().toISOString()
       };
-      // Emit immediately for sub-millisecond reaction time on the Dashboard
       io.emit("locationUpdate", broadcastPayload);
 
-      // Save to database in async background
       await Officer.findOneAndUpdate(
         { unique_id: data.userId }, 
         {
@@ -71,8 +83,12 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("dispatchAlert", (data) => {
+    console.log(`Dispatching real-time alert to user ${data.targetUserId}`);
+    io.to(data.targetUserId).emit("incidentAlert", data.incident);
+  });
+
   socket.on("updateStatus", async (data) => {
-    // Expected data: userId, status
     try {
       await Officer.findOneAndUpdate(
         { unique_id: data.userId },
@@ -92,6 +108,7 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(3000, "0.0.0.0", () => {
-  console.log("Node.js Socket.io Server running on port 3000 (0.0.0.0)");
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, "0.0.0.0", () => {
+  console.log(`Node.js Socket.io Server running on port ${PORT} (0.0.0.0)`);
 });
