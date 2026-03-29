@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 import '../models/officer_location.dart';
+import '../utils/constants.dart';
 import 'api_service.dart';
 
 class LocationService {
@@ -64,6 +65,11 @@ class LocationService {
     return null;
   }
 
+  final StreamController<Map<String, dynamic>> _alertController =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  Stream<Map<String, dynamic>> get alertStream => _alertController.stream;
+
   Future<void> startTracking() async {
     if (_tracking) return;
 
@@ -73,10 +79,32 @@ class LocationService {
       return;
     }
 
+    final uniqueId = await _storage.read(key: _uniqueIdKey);
+
     _socket = IO.io(
-      'http://192.168.0.147:3000',
+      SOCKET_SERVER_URL,
       IO.OptionBuilder().setTransports(['websocket']).build(),
     );
+
+    _socket!.onConnect((_) {
+      print('Socket connected: ${_socket!.id}');
+      if (uniqueId != null) {
+        _socket!.emit('join', uniqueId);
+      }
+    });
+
+    _socket!.on('incidentAlert', (data) {
+      print('REAL-TIME INCIDENT ALERT RECEIVED: $data');
+      _alertController.add(Map<String, dynamic>.from(data));
+    });
+
+    _socket!.onError((error) {
+      print('Socket connection error: $error');
+    });
+
+    _socket!.onDisconnect((_) {
+      print('Socket disconnected');
+    });
 
     await _positionSubscription?.cancel();
     _positionSubscription = Geolocator.getPositionStream(

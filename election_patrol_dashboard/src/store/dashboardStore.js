@@ -1,10 +1,55 @@
 import { create } from "zustand";
+import { io } from "socket.io-client";
+import { NODE_SOCKET_URL } from "../utils/constants";
 
-export const useDashboardStore = create((set) => ({
+export const useDashboardStore = create((set, get) => ({
   officers: [],
   incidents: [],
   selectedIncident: null,
   connectedOfficerCount: 0,
+  socket: null,
+
+  initSocket: () => {
+    if (get().socket) return;
+    const s = io(NODE_SOCKET_URL, {
+      transports: ["websocket"],
+      reconnectionAttempts: 5,
+    });
+
+    s.on("connect", () => {
+      console.log("[NodeSocket] Connected!");
+    });
+
+    s.on("disconnect", () => {
+      console.log("[NodeSocket] Disconnected");
+    });
+
+    s.on("error", (error) => {
+      console.error("[NodeSocket] Error:", error);
+    });
+
+    s.on("locationUpdate", (data) => {
+      get().updateOfficerLocation(
+        data.unique_id,
+        data.latitude,
+        data.longitude,
+        data.availability_status,
+        data.timestamp
+      );
+    });
+
+    set({ socket: s });
+  },
+
+  emitDispatch: (targetUserId, incident) => {
+    const s = get().socket;
+    if (s && s.connected) {
+      console.log(`[NodeSocket] Dispatching alert to ${targetUserId}:`, incident);
+      s.emit("dispatchAlert", { targetUserId, incident });
+    } else {
+      console.warn(`[NodeSocket] Cannot dispatch - socket not connected`);
+    }
+  },
 
   setOfficers: (officers) => set({ officers }),
 
