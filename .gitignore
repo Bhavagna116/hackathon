@@ -29,6 +29,7 @@ node_modules/
 # Android
 **/local.properties
 **/key.properties
+**/gradle.properties
 *.jks
 *.keystore
 
