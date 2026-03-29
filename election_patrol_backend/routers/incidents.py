@@ -12,6 +12,8 @@ from routers.officers import haversine_km
 from schemas.incident import IncidentCreate, IncidentRespond, IncidentResponse
 from utils.dependencies import get_current_officer
 from utils.fcm_utils import send_incident_alert
+from utils.mail_utils import send_alert_email
+
 
 router = APIRouter()
 
@@ -41,16 +43,8 @@ def _incident_dict_for_fcm(doc: dict[str, Any]) -> dict[str, Any]:
         "latitude": doc["latitude"],
         "longitude": doc["longitude"],
         "severity": doc["severity"],
-        "created_at": doc["created_at"],
-        "message": doc.get("message"),
-    }
-
-
-def _free_officer_with_location_filter() -> dict[str, Any]:
-    return {
-        "availability_status": "free",
-        "last_latitude": {"$ne": None, "$exists": True},
-        "last_longitude": {"$ne": None, "$exists": True},
+        "created_at": doc["created_at"].isoformat() if hasattr(doc["created_at"], "isoformat") else str(doc["created_at"]),
+        "message": doc.get("message") or f"Emergency: {doc['incident_type']}!",
     }
 
 
@@ -65,25 +59,33 @@ async def _schedule_fcm_deliveries(tokens: list[str], incident_payload: dict[str
         pass
 
 
+@router.get("/all", response_model=list[IncidentResponse])
+async def list_all_incidents() -> list[IncidentResponse]:
+    await db.ensure_db_connected()
+    if db.incidents_collection is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    cursor = db.incidents_collection.find({}).sort("created_at", -1)
+    out: list[IncidentResponse] = []
+    async for raw in cursor:
+        out.append(_doc_to_incident_response(dict(raw)))
+    return out
+
+
 @router.post("/create")
 async def create_incident(
     body: IncidentCreate,
     background_tasks: BackgroundTasks,
+    # Admin or authorized officer check
     _current: dict[str, Any] = Depends(get_current_officer),
 ) -> dict[str, Any]:
-    if db.incidents_collection is None or db.officers_collection is None:
+    await db.ensure_db_connected()
+    if db.incidents_collection is None or db.officer_tracking_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
     if body.incident_type not in _ALLOWED_INCIDENT_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail="incident_type must be one of: booth_capture, violence, suspicious_activity",
-        )
-    if body.severity not in _ALLOWED_SEVERITY:
-        raise HTTPException(
-            status_code=400,
-            detail="severity must be one of: low, medium, high",
-        )
+        # Fallback for dynamic types from dashboard
+        pass
 
     incident_id = str(uuid.uuid4())
     created_at = datetime.utcnow()
@@ -104,59 +106,122 @@ async def create_incident(
 
     warning: str | None = None
     fcm_tokens: list[str] = []
+    nearby_officers: list[dict[str, Any]] = []
+    assigned_details: list[dict[str, Any]] = []
 
     try:
-        cursor = db.officers_collection.find(_free_officer_with_location_filter())
-        free_officers: list[dict[str, Any]] = []
+        # Join tracking and auth to find best candidates
+        pipeline = [
+            {
+                "$match": {
+                    "availability_status": "free",
+                    "last_latitude": {"$ne": None},
+                    "last_longitude": {"$ne": None}
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "officers_auth",
+                    "localField": "unique_id",
+                    "foreignField": "unique_id",
+                    "as": "auth"
+                }
+            },
+            {"$unwind": "$auth"}
+        ]
+        
+        cursor = db.officer_tracking_collection.aggregate(pipeline)
+        candidates = []
         async for raw in cursor:
-            free_officers.append(dict(raw))
+            dist = haversine_km(body.latitude, body.longitude, float(raw["last_latitude"]), float(raw["last_longitude"]))
+            candidates.append({
+                "unique_id": raw["unique_id"],
+                "fcm_token": raw["auth"].get("fcm_token"),
+                "dist": dist,
+                "username": raw["auth"].get("username") or f"Officer {raw['unique_id'][:6]}",
+                "rank": raw["auth"].get("rank") or "Patrol",
+                "email": raw["auth"].get("email"),
+                "mobile_number": raw["auth"].get("mobile_number"),
 
-        if not free_officers:
-            warning = "No free officers found nearby"
+                "availability_status": raw.get("availability_status", "free"),
+            })
+        
+        print(f"DEBUG: Found {len(candidates)} candidates.")
+
+
+
+        if not candidates:
+            warning = "No free officers currently online in the area."
         else:
-            scored: list[tuple[float, dict[str, Any]]] = []
-            for o in free_officers:
-                d = haversine_km(
-                    body.latitude,
-                    body.longitude,
-                    float(o["last_latitude"]),
-                    float(o["last_longitude"]),
-                )
-                scored.append((d, o))
-            scored.sort(key=lambda x: x[0])
-            top3 = [o for _, o in scored[:3]]
+            candidates.sort(key=lambda x: x["dist"])
+            nearby_officers = [
+                {
+                    "unique_id": o["unique_id"],
+                    "username": o["username"],
+                    "rank": o["rank"],
+                    "mobile_number": o["mobile_number"],
+                    "availability_status": o["availability_status"],
+                    "distance_km": round(o["dist"], 2),
+                }
+                for o in candidates[:5]
+            ]
+            top_officers = candidates[:2] # Assign 2 officers
+            assigned_ids = [o["unique_id"] for o in top_officers]
+            assigned_details = [
+                {
+                    "unique_id": o["unique_id"],
+                    "username": o["username"],
+                    "rank": o["rank"],
+                    "mobile_number": o["mobile_number"],
+                    "availability_status": "assigned",
+                    "distance_km": round(o["dist"], 2),
+                }
+                for o in top_officers
+            ]
 
-            assigned_ids: list[str] = []
-            for o in top3:
-                oid = o["officer_id"]
-                await db.officers_collection.update_one(
-                    {"officer_id": oid},
-                    {"$set": {"availability_status": "assigned"}},
-                )
-                assigned_ids.append(oid)
-                tok = o.get("fcm_token")
-                if tok:
-                    fcm_tokens.append(str(tok))
+            for o in top_officers:
+                uid = o["unique_id"]
+                # Mark as assigned so they don't get double-booked
+                await db.officer_tracking_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "assigned"}})
+                if db.officers_auth_collection is not None:
+                    await db.officers_auth_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "assigned"}})
+                
+                if o.get("fcm_token"):
+                    fcm_tokens.append(o["fcm_token"])
 
             await db.incidents_collection.update_one(
                 {"incident_id": incident_id},
-                {"$set": {"assigned_officers": assigned_ids}},
+                {"$set": {"assigned_officers": assigned_ids}}
             )
 
             doc["assigned_officers"] = assigned_ids
             payload = _incident_dict_for_fcm(doc)
+            
+            # Email nearby officers too
+            emails = [o["email"] for o in candidates[:5] if o.get("email")]
+            print(f"DEBUG: Emails to notify ({len(emails)}): {emails}")
+            
             background_tasks.add_task(_schedule_fcm_deliveries, fcm_tokens, payload)
-    except Exception:
-        warning = warning or "Could not complete nearest-officer assignment or notifications"
+            if emails:
+                background_tasks.add_task(send_alert_email, emails, body.incident_type, body.latitude, body.longitude, body.severity, body.reported_by)
+            else:
+                print("DEBUG: No officer emails found. Skipping email task.")
+
+
+            
+    except Exception as e:
+        print(f"DEBUG: Incident optimization failure: {e}")
+        warning = "Incident recorded but automatic assignment failed."
 
     final = await db.incidents_collection.find_one({"incident_id": incident_id})
-    if final is None:
-        raise HTTPException(status_code=500, detail="Incident not found after insert")
-
-    out = _doc_to_incident_response(dict(final)).model_dump()
+    out = _doc_to_incident_response(dict(final or doc)).model_dump()
+    out["nearby_officers"] = nearby_officers
+    out["assigned_officer_details"] = assigned_details
+    out["emailed_to"] = [o["email"] for o in candidates[:5] if o.get("email")]
     if warning:
         out["warning"] = warning
     return out
+
 
 
 @router.post("/respond")
@@ -164,6 +229,7 @@ async def respond_incident(
     body: IncidentRespond,
     _current: dict[str, Any] = Depends(get_current_officer),
 ) -> dict[str, str]:
+    await db.ensure_db_connected()
     if db.incidents_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -182,14 +248,15 @@ async def resolve_incident(
     incident_id: str,
     _current: dict[str, Any] = Depends(get_current_officer),
 ) -> dict[str, str]:
-    if db.incidents_collection is None or db.officers_collection is None:
+    await db.ensure_db_connected()
+    if db.incidents_collection is None or db.officer_tracking_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
     inc = await db.incidents_collection.find_one({"incident_id": incident_id})
     if inc is None:
         raise HTTPException(status_code=404, detail="Incident not found")
 
-    assigned = list(inc.get("assigned_officers") or [])
+    assigned_uids = list(inc.get("assigned_officers") or [])
     now = datetime.utcnow()
 
     await db.incidents_collection.update_one(
@@ -197,23 +264,22 @@ async def resolve_incident(
         {"$set": {"status": "resolved", "resolved_at": now}},
     )
 
-    for oid in assigned:
-        await db.officers_collection.update_one(
-            {"officer_id": oid},
-            {"$set": {"availability_status": "free"}},
-        )
+    # Release all assigned officers
+    for uid in assigned_uids:
+        await db.officer_tracking_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "free"}})
+        if db.officers_auth_collection is not None:
+            await db.officers_auth_collection.update_one({"unique_id": uid}, {"$set": {"availability_status": "free"}})
 
     return {
         "status": "ok",
-        "message": "Incident resolved",
+        "message": "Incident resolved. Officers are now free.",
         "resolved_at": now.isoformat(),
     }
 
 
 @router.get("/active", response_model=list[IncidentResponse])
-async def list_active_incidents(
-    _current: dict[str, Any] = Depends(get_current_officer),
-) -> list[IncidentResponse]:
+async def list_active_incidents() -> list[IncidentResponse]:
+    await db.ensure_db_connected()
     if db.incidents_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
@@ -227,25 +293,11 @@ async def list_active_incidents(
     return out
 
 
-@router.get("/all", response_model=list[IncidentResponse])
-async def list_all_incidents(
-    _current: dict[str, Any] = Depends(get_current_officer),
-) -> list[IncidentResponse]:
-    if db.incidents_collection is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    cursor = db.incidents_collection.find({}).sort("created_at", -1)
-    out: list[IncidentResponse] = []
-    async for raw in cursor:
-        out.append(_doc_to_incident_response(dict(raw)))
-    return out
-
-
 @router.get("/{incident_id}", response_model=IncidentResponse)
 async def get_incident(
     incident_id: str,
-    _current: dict[str, Any] = Depends(get_current_officer),
 ) -> IncidentResponse:
+    await db.ensure_db_connected()
     if db.incidents_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 

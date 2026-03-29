@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
-
+import '../services/notification_service.dart';
 import '../models/incident_alert.dart';
+import '../models/officer_location.dart';
 import '../services/api_service.dart';
+import '../services/location_service.dart';
 import 'map_screen.dart';
 
 class AlertScreen extends StatelessWidget {
@@ -9,10 +11,12 @@ class AlertScreen extends StatelessWidget {
     super.key,
     required this.alert,
     required this.api,
+    required this.location,
   });
 
   final IncidentAlert alert;
   final ApiService api;
+  final LocationService location;
 
   static const Color _navy = Color(0xFF0A2342);
 
@@ -39,8 +43,9 @@ class AlertScreen extends StatelessWidget {
   }
 
   Future<void> _responding(BuildContext context) async {
+    NotificationService.stopAlarm();
     try {
-      await api.updateStatus('assigned');
+      location.setAvailabilityStatus(AvailabilityStatus.assigned);
       await api.respondToIncident(alert.incidentId);
       if (!context.mounted) return;
       Navigator.of(context).pushReplacement(
@@ -58,8 +63,9 @@ class AlertScreen extends StatelessWidget {
   }
 
   Future<void> _cannotRespond(BuildContext context) async {
+    NotificationService.stopAlarm();
     try {
-      await api.updateStatus('busy');
+      location.setAvailabilityStatus(AvailabilityStatus.busy);
       if (!context.mounted) return;
       Navigator.of(context).pop();
     } catch (e) {

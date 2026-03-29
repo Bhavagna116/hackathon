@@ -39,15 +39,42 @@ async def _build_initial_snapshot() -> dict[str, Any]:
     officers: list[dict[str, Any]] = []
     incidents: list[dict[str, Any]] = []
 
-    if db.officers_collection is not None:
-        cursor = db.officers_collection.find(
+    if db.officer_tracking_collection is not None:
+        cursor = db.officer_tracking_collection.aggregate([
             {
-                "last_latitude": {"$ne": None, "$exists": True},
-                "last_longitude": {"$ne": None, "$exists": True},
+                "$match": {
+                    "last_latitude": {"$ne": None, "$exists": True},
+                    "last_longitude": {"$ne": None, "$exists": True}
+                }
+            },
+            {
+                "$lookup": {
+                    "from": "officers_auth",
+                    "localField": "unique_id",
+                    "foreignField": "unique_id",
+                    "as": "auth"
+                }
+            },
+            {
+                "$unwind": {
+                    "path": "$auth",
+                    "preserveNullAndEmptyArrays": True
+                }
             }
-        )
-        async for raw in cursor:
-            officers.append(_serialize_doc(dict(raw)))
+        ])
+        async for doc in cursor:
+            auth = doc.get("auth") or {}
+            item = {
+                "unique_id": doc["unique_id"],
+                "username": auth.get("username") or f"Officer {doc['unique_id'][:6]}",
+                "rank": auth.get("rank") or "Patrol",
+                "availability_status": doc.get("availability_status", "free"),
+                "last_latitude": doc["last_latitude"],
+                "last_longitude": doc["last_longitude"],
+                "last_updated": doc.get("last_updated"),
+                "mobile_number": auth.get("mobile_number"),
+            }
+            officers.append(_serialize_doc(item))
 
     if db.incidents_collection is not None:
         cursor = db.incidents_collection.find({"status": {"$in": ["pending", "responding"]}})
@@ -63,30 +90,30 @@ async def _build_initial_snapshot() -> dict[str, Any]:
     }
 
 
-@router.websocket("/officer/{officer_id}")
+@router.websocket("/officer/{unique_id}")
 async def officer_location_ws(
     websocket: WebSocket,
-    officer_id: str,
+    unique_id: str,
     token: str = Query(...),
 ) -> None:
     payload = _auth_ws_payload(token)
     if payload is None:
         await websocket.close(code=1008, reason="Invalid or expired token")
         return
-    token_oid = payload.get("officer_id")
-    if token_oid is None or str(token_oid) != str(officer_id):
-        await websocket.close(code=1008, reason="officer_id mismatch")
+    token_oid = payload.get("unique_id")
+    if token_oid is None or str(token_oid) != str(unique_id):
+        await websocket.close(code=1008, reason="unique_id mismatch")
         return
 
-    if db.officers_collection is None:
+    if db.officers_auth_collection is None:
         await websocket.close(code=1011, reason="Database unavailable")
         return
 
-    await manager.connect_officer(officer_id, websocket)
+    await manager.connect_officer(unique_id, websocket)
     await manager.broadcast_to_dashboards(
         {
             "event": "officer_connected",
-            "officer_id": officer_id,
+            "unique_id": unique_id,
             "timestamp": _utc_iso(),
         }
     )
@@ -115,39 +142,42 @@ async def officer_location_ws(
                 continue
 
             now = datetime.utcnow()
-            await db.officers_collection.update_one(
-                {"officer_id": officer_id},
+            await db.officer_tracking_collection.update_one(
+                {"unique_id": unique_id},
                 {"$set": {"last_latitude": lat, "last_longitude": lng, "last_updated": now}},
+                upsert=True
             )
 
-            doc = await db.officers_collection.find_one({"officer_id": officer_id})
+            doc = await db.officers_auth_collection.find_one({"unique_id": unique_id})
             if doc is None:
                 continue
             d = dict(doc)
+            
+            tracking_doc = await db.officer_tracking_collection.find_one({"unique_id": unique_id})
+            ts = tracking_doc.get("last_updated") if tracking_doc else now
 
-            ts = d.get("last_updated")
             ts_str = ts.isoformat() if hasattr(ts, "isoformat") else _utc_iso()
 
             await manager.broadcast_to_dashboards(
                 {
                     "event": "location_update",
-                    "officer_id": officer_id,
+                    "unique_id": unique_id,
                     "username": d.get("username", ""),
                     "rank": d.get("rank", ""),
                     "latitude": lat,
                     "longitude": lng,
-                    "availability_status": d.get("availability_status", "free"),
+                    "availability_status": tracking_doc.get("availability_status", "free") if tracking_doc else "free",
                     "timestamp": ts_str,
                 }
             )
     except WebSocketDisconnect:
         pass
     finally:
-        manager.disconnect_officer(officer_id)
+        manager.disconnect_officer(unique_id)
         await manager.broadcast_to_dashboards(
             {
                 "event": "officer_disconnected",
-                "officer_id": officer_id,
+                "unique_id": unique_id,
                 "timestamp": _utc_iso(),
             }
         )
@@ -155,13 +185,8 @@ async def officer_location_ws(
 
 @router.websocket("/dashboard")
 async def dashboard_ws(
-    websocket: WebSocket,
-    token: str = Query(...),
+    websocket: WebSocket
 ) -> None:
-    payload = _auth_ws_payload(token)
-    if payload is None:
-        await websocket.close(code=1008, reason="Invalid or expired token")
-        return
 
     await manager.connect_dashboard(websocket)
 

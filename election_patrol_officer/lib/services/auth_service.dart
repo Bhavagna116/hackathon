@@ -6,7 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import '../utils/constants.dart';
 
 class AuthService {
-  static const _keyOfficerId = 'officer_id';
+  static const _keyUniqueId = 'unique_id';
   static const _keyToken = 'token';
   static const _keyName = 'name';
   static const _keyRank = 'rank';
@@ -34,12 +34,12 @@ class AuthService {
 
   Future<String?> readStoredRank() async => _storage.read(key: _keyRank);
 
-  Future<Map<String, dynamic>> login(String officerId, String password) async {
+  Future<Map<String, dynamic>> login(String identifier, String password) async {
     try {
       final response = await _dio.post(
         '$BASE_URL/auth/login',
         data: <String, dynamic>{
-          'officer_id': officerId,
+          'username': identifier,
           'password': password,
         },
       );
@@ -54,11 +54,15 @@ class AuthService {
         throw Exception('Missing token in response');
       }
 
-      final id = payload['officer_id']?.toString() ?? officerId;
-      final name = payload['name']?.toString() ?? '';
-      final rank = payload['rank']?.toString() ?? '';
+      final Map<String, dynamic> officerData = payload['officer'] is Map 
+          ? Map<String, dynamic>.from(payload['officer'] as Map) 
+          : payload;
+      
+      final id = officerData['unique_id']?.toString() ?? identifier;
+      final name = officerData['full_name']?.toString() ?? officerData['name']?.toString() ?? '';
+      final rank = officerData['rank']?.toString() ?? '';
 
-      await _storage.write(key: _keyOfficerId, value: id);
+      await _storage.write(key: _keyUniqueId, value: id);
       await _storage.write(key: _keyToken, value: token);
       await _storage.write(key: _keyName, value: name);
       await _storage.write(key: _keyRank, value: rank);
@@ -111,5 +115,45 @@ class AuthService {
 
   Future<void> logout() async {
     await _storage.deleteAll();
+  }
+
+  Future<void> register({
+    required String name,
+    required String username,
+    required String email,
+    required String password,
+    required String confirmPassword,
+    required String mobileNumber,
+  }) async {
+    try {
+      await _dio.post(
+        '$BASE_URL/auth/register',
+        data: <String, dynamic>{
+          'name': name,
+          'username': username,
+          'email': email,
+          'password': password,
+          'confirm_password': confirmPassword,
+          'mobile_number': mobileNumber,
+        },
+      );
+    } on DioException catch (e) {
+      throw Exception(_messageFromDio(e));
+    }
+  }
+
+  Future<void> resetPassword(String identifier, String newPassword, String confirmPassword) async {
+    try {
+      await _dio.post(
+        '$BASE_URL/auth/reset-password',
+        data: <String, dynamic>{
+          'identifier': identifier,
+          'new_password': newPassword,
+          'confirm_password': confirmPassword,
+        },
+      );
+    } on DioException catch (e) {
+      throw Exception(_messageFromDio(e));
+    }
   }
 }

@@ -6,6 +6,7 @@ import OfficerList from "../components/officers/OfficerList";
 import Navbar from "../components/shared/Navbar";
 import StatsBar from "../components/shared/StatsBar";
 import { useWebSocket } from "../hooks/useWebSocket";
+import { useNodeSocket } from "../hooks/useNodeSocket";
 import { BASE_URL } from "../utils/constants";
 import { format } from "date-fns";
 
@@ -96,6 +97,7 @@ const sidePanelHalfStyle = {
 
 export default function DashboardPage() {
   const { isConnected } = useWebSocket();
+  useNodeSocket(); // Boots up the secondary listener for instant GPS node routing
 
   const [now, setNow] = useState(() => new Date());
 

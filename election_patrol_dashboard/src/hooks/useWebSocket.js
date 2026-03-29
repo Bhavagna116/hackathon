@@ -26,7 +26,7 @@ function handleWsMessage(raw, setLastMessage) {
         break;
       case "location_update":
         store.updateOfficerLocation(
-          data.officer_id,
+          data.unique_id,
           data.latitude,
           data.longitude,
           data.availability_status,
@@ -37,7 +37,7 @@ function handleWsMessage(raw, setLastMessage) {
         store.addOfficerOnline(data);
         break;
       case "officer_disconnected":
-        store.removeOfficerOffline(data.officer_id);
+        store.removeOfficerOffline(data.unique_id);
         break;
       default:
         break;
@@ -98,10 +98,7 @@ export function useWebSocket() {
     function connect() {
       clearReconnect();
 
-      const token = localStorage.getItem("patrol_token");
-      if (!token) return;
-
-      const url = `${WS_URL}/ws/dashboard?token=${encodeURIComponent(token)}`;
+      const url = `${WS_URL}/ws/dashboard`;
 
       let ws;
       try {

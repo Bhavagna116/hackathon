@@ -9,9 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 import database.connection as db
 from schemas.officer import (
     FCMTokenUpdate,
-    LocationUpdate,
     OfficerResponse,
-    StatusUpdate,
 )
 from utils.dependencies import get_current_officer
 
@@ -29,99 +27,59 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _doc_to_officer_response(doc: dict[str, Any]) -> OfficerResponse:
+    tracking = doc.get("tracking", {})
     return OfficerResponse(
-        officer_id=doc["officer_id"],
+        unique_id=doc["unique_id"],
         username=doc["username"],
         email=doc["email"],
         rank=doc["rank"],
         mobile_number=doc["mobile_number"],
         full_name=doc.get("full_name"),
         fcm_token=doc.get("fcm_token"),
-        availability_status=doc.get("availability_status", "free"),
-        last_latitude=doc.get("last_latitude"),
-        last_longitude=doc.get("last_longitude"),
-        last_updated=doc.get("last_updated"),
+        availability_status=tracking.get("availability_status", "free"),
+        last_latitude=tracking.get("last_latitude"),
+        last_longitude=tracking.get("last_longitude"),
+        last_updated=tracking.get("last_updated"),
         created_at=doc["created_at"],
     )
 
-
-def _location_filter() -> dict[str, Any]:
-    return {
-        "last_latitude": {"$ne": None, "$exists": True},
-        "last_longitude": {"$ne": None, "$exists": True},
-    }
+def _get_location_pipeline():
+    return [
+        {
+            "$match": {
+                "last_latitude": {"$ne": None, "$exists": True},
+                "last_longitude": {"$ne": None, "$exists": True}
+            }
+        },
+        {
+            "$lookup": {
+                "from": "officers_auth",
+                "localField": "unique_id",
+                "foreignField": "unique_id",
+                "as": "auth"
+            }
+        },
+        {
+            "$unwind": {
+                "path": "$auth",
+                "preserveNullAndEmptyArrays": True
+            }
+        }
+    ]
 
 
 def _officer_list_fields_from_doc(doc: dict[str, Any]) -> dict[str, Any]:
-    """Route 4 shape — excludes password_hash and fcm_token by construction."""
+    # Doc is now primarily from officer_tracking, with auth fields potentially in 'auth'
+    auth = doc.get("auth") or {}
     return {
-        "officer_id": doc["officer_id"],
-        "username": doc["username"],
-        "rank": doc["rank"],
+        "unique_id": doc["unique_id"],
+        "username": auth.get("username") or f"Officer {doc['unique_id'][:6]}",
+        "rank": auth.get("rank") or "Patrol",
         "availability_status": doc.get("availability_status", "free"),
-        "last_latitude": doc["last_latitude"],
-        "last_longitude": doc["last_longitude"],
+        "last_latitude": doc.get("last_latitude"),
+        "last_longitude": doc.get("last_longitude"),
         "last_updated": doc.get("last_updated"),
-    }
-
-
-@router.post("/location")
-async def update_location(
-    body: LocationUpdate,
-    current: dict[str, Any] = Depends(get_current_officer),
-) -> dict[str, str]:
-    if db.officers_collection is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    if not -90 <= body.latitude <= 90:
-        raise HTTPException(status_code=400, detail="latitude must be between -90 and 90")
-    if not -180 <= body.longitude <= 180:
-        raise HTTPException(status_code=400, detail="longitude must be between -180 and 180")
-
-    officer_id = current["officer_id"]
-    now = datetime.utcnow()
-    result = await db.officers_collection.update_one(
-        {"officer_id": officer_id},
-        {
-            "$set": {
-                "last_latitude": body.latitude,
-                "last_longitude": body.longitude,
-                "last_updated": now,
-            }
-        },
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Officer not found")
-
-    return {"status": "ok", "message": "Location updated"}
-
-
-@router.post("/status")
-async def update_status(
-    body: StatusUpdate,
-    current: dict[str, Any] = Depends(get_current_officer),
-) -> dict[str, str]:
-    if db.officers_collection is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-
-    if body.status not in _ALLOWED_STATUS:
-        raise HTTPException(
-            status_code=400,
-            detail='status must be one of: "free", "busy", "assigned"',
-        )
-
-    officer_id = current["officer_id"]
-    result = await db.officers_collection.update_one(
-        {"officer_id": officer_id},
-        {"$set": {"availability_status": body.status}},
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Officer not found")
-
-    return {
-        "status": "ok",
-        "message": "Status updated",
-        "availability_status": body.status,
+        "mobile_number": auth.get("mobile_number"),
     }
 
 
@@ -130,12 +88,12 @@ async def update_fcm_token(
     body: FCMTokenUpdate,
     current: dict[str, Any] = Depends(get_current_officer),
 ) -> dict[str, str]:
-    if db.officers_collection is None:
+    if db.officers_auth_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    officer_id = current["officer_id"]
-    result = await db.officers_collection.update_one(
-        {"officer_id": officer_id},
+    unique_id = current["unique_id"]
+    result = await db.officers_auth_collection.update_one(
+        {"unique_id": unique_id},
         {"$set": {"fcm_token": body.fcm_token}},
     )
     if result.matched_count == 0:
@@ -145,17 +103,14 @@ async def update_fcm_token(
 
 
 @router.get("/all")
-async def list_officers_with_location(
-    _current: dict[str, Any] = Depends(get_current_officer),
-) -> list[dict[str, Any]]:
-    if db.officers_collection is None:
+async def list_officers_with_location() -> list[dict[str, Any]]:
+    if db.officer_tracking_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    cursor = db.officers_collection.find(_location_filter())
+    cursor = db.officer_tracking_collection.aggregate(_get_location_pipeline())
     out: list[dict[str, Any]] = []
     async for doc in cursor:
-        d = dict(doc)
-        out.append(_officer_list_fields_from_doc(d))
+        out.append(_officer_list_fields_from_doc(doc))
     return out
 
 
@@ -164,20 +119,20 @@ async def officers_nearby(
     lat: float,
     lng: float,
     radius_km: float = Query(5.0, ge=0),
-    _current: dict[str, Any] = Depends(get_current_officer),
 ) -> list[dict[str, Any]]:
-    if db.officers_collection is None:
+    if db.officer_tracking_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    cursor = db.officers_collection.find(_location_filter())
+    cursor = db.officer_tracking_collection.aggregate(_get_location_pipeline())
     results: list[dict[str, Any]] = []
     async for doc in cursor:
-        d = dict(doc)
-        olat = d["last_latitude"]
-        olng = d["last_longitude"]
+        olat = doc.get("last_latitude")
+        olng = doc.get("last_longitude")
+        if olat is None or olng is None:
+            continue
         dist = haversine_km(lat, lng, float(olat), float(olng))
         if dist <= radius_km:
-            item = _officer_list_fields_from_doc(d)
+            item = _officer_list_fields_from_doc(doc)
             item["distance_km"] = round(dist, 2)
             results.append(item)
 

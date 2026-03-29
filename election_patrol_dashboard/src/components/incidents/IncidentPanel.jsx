@@ -114,30 +114,12 @@ function toastError(err) {
 }
 
 export default function IncidentPanel() {
-  const [tab, setTab] = useState("active");
   const incidents = useDashboardStore((s) => s.incidents);
-  const addIncident = useDashboardStore((s) => s.addIncident);
   const updateIncidentStatus = useDashboardStore(
     (s) => s.updateIncidentStatus
   );
 
-  const officer = useAuthStore((s) => s.officer);
-
   const [resolvingId, setResolvingId] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  const [form, setForm] = useState({
-    incident_type: "booth_capture",
-    severity: "medium",
-    latitude: "0.0",
-    longitude: "0.0",
-    reported_by: officer?.username ?? "",
-  });
-
-  useEffect(() => {
-    const u = officer?.username;
-    if (u) setForm((f) => ({ ...f, reported_by: u }));
-  }, [officer?.username]);
 
   const activeIncidents = useMemo(
     () =>
@@ -162,277 +144,135 @@ export default function IncidentPanel() {
     }
   }
 
-  async function handleReportSubmit(e) {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      const payload = {
-        incident_type: form.incident_type,
-        latitude: Number(form.latitude),
-        longitude: Number(form.longitude),
-        severity: form.severity,
-        reported_by: form.reported_by,
-      };
-      const { data } = await incidentsApi.createIncident(payload);
-      const { warning: _w, ...incident } = data;
-      addIncident(incident);
-      toast.success("Incident reported! Nearest officers alerted.");
-      setTab("active");
-      setForm({
-        incident_type: "booth_capture",
-        severity: "medium",
-        latitude: "0.0",
-        longitude: "0.0",
-        reported_by: officer?.username ?? "",
-      });
-    } catch (err) {
-      toastError(err);
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
     <div style={panelStyle}>
-      <div style={tabRowStyle}>
-        <button
-          type="button"
-          style={tabBtn(tab === "active")}
-          onClick={() => setTab("active")}
-        >
-          Active Incidents ({activeCount})
-        </button>
-        <button
-          type="button"
-          style={tabBtn(tab === "report")}
-          onClick={() => setTab("report")}
-        >
-          Report Incident
-        </button>
+      <div style={{
+        padding: "0.75rem 1rem",
+        borderBottom: "1px solid rgba(255,255,255,0.12)",
+        fontWeight: 700,
+        fontSize: "0.85rem",
+        background: "rgba(255,255,255,0.03)"
+      }}>
+        Active Incidents ({activeCount})
       </div>
 
-      {tab === "active" ? (
-        <div style={scrollStyle}>
-          {activeIncidents.length === 0 ? (
-            <div
-              style={{
-                flex: 1,
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 12,
-                minHeight: 140,
-                padding: "1rem",
-                color: "#81c784",
-              }}
-            >
-              <Inbox size={42} strokeWidth={1.5} aria-hidden />
-              <span style={{ fontWeight: 600, textAlign: "center" }}>
-                No active incidents
-              </span>
-              <span
+      <div style={scrollStyle}>
+        {activeIncidents.length === 0 ? (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 12,
+              minHeight: 140,
+              padding: "1rem",
+              color: "#81c784",
+            }}
+          >
+            <Inbox size={42} strokeWidth={1.5} aria-hidden />
+            <span style={{ fontWeight: 600, textAlign: "center" }}>
+              No active incidents
+            </span>
+          </div>
+        ) : (
+          activeIncidents.map((inc) => {
+            const created = parseDate(inc.created_at);
+            const distLabel = created
+              ? `${formatDistanceToNow(created, { addSuffix: true })}`
+              : "—";
+            const assigned = inc.assigned_officers?.length ?? 0;
+            const busy = resolvingId === inc.incident_id;
+
+            return (
+              <div
+                key={inc.incident_id}
                 style={{
-                  fontSize: "0.78rem",
-                  opacity: 0.85,
-                  textAlign: "center",
+                  ...cardStyle,
+                  borderLeft: severityLeftBorder(inc.severity),
                 }}
               >
-                New reports will appear here in real time.
-              </span>
-            </div>
-          ) : (
-            activeIncidents.map((inc) => {
-              const created = parseDate(inc.created_at);
-              const distLabel = created
-                ? `${formatDistanceToNow(created, { addSuffix: true })}`
-                : "—";
-              const assigned = inc.assigned_officers?.length ?? 0;
-              const busy = resolvingId === inc.incident_id;
-
-              return (
+                <div style={{ fontWeight: 700, marginBottom: 6 }}>
+                  {formatIncidentType(inc.incident_type)}
+                </div>
                 <div
-                  key={inc.incident_id}
                   style={{
-                    ...cardStyle,
-                    borderLeft: severityLeftBorder(inc.severity),
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 6,
+                    marginBottom: 8,
                   }}
                 >
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                    {formatIncidentType(inc.incident_type)}
-                  </div>
-                  <div
+                  <span
                     style={{
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 6,
-                      marginBottom: 8,
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: "2px 8px",
-                        borderRadius: 4,
-                        textTransform: "capitalize",
-                        ...severityBadgeStyle(inc.severity),
-                      }}
-                    >
-                      {inc.severity}
-                    </span>
-                    <span
-                      style={{
-                        fontSize: 11,
-                        fontWeight: 600,
-                        padding: "2px 8px",
-                        borderRadius: 4,
-                        textTransform: "capitalize",
-                        ...statusBadgeStyle(inc.status),
-                      }}
-                    >
-                      {inc.status}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 4 }}>
-                    {distLabel}
-                  </div>
-                  <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 10 }}>
-                    Assigned officers: {assigned}
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => handleResolve(inc.incident_id)}
-                    style={{
-                      padding: "0.4rem 0.75rem",
-                      fontSize: "0.8rem",
+                      fontSize: 11,
                       fontWeight: 600,
-                      border: "none",
-                      borderRadius: 6,
-                      background: busy ? "#546e7a" : "#c62828",
-                      color: "#fff",
-                      cursor: busy ? "not-allowed" : "pointer",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: 6,
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      textTransform: "capitalize",
+                      ...severityBadgeStyle(inc.severity),
                     }}
                   >
-                    {busy ? (
-                      <>
-                        <Loader2
-                          size={14}
-                          style={{ animation: "spin 0.8s linear infinite" }}
-                        />
-                        Resolving…
-                      </>
-                    ) : (
-                      "Resolve"
-                    )}
-                  </button>
+                    {inc.severity}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      padding: "2px 8px",
+                      borderRadius: 4,
+                      textTransform: "capitalize",
+                      ...statusBadgeStyle(inc.status),
+                    }}
+                  >
+                    {inc.status}
+                  </span>
                 </div>
-              );
-            })
-          )}
-          <style>{`
-            @keyframes spin { to { transform: rotate(360deg); } }
-          `}</style>
-        </div>
-      ) : (
-        <div style={scrollStyle}>
-          <form onSubmit={handleReportSubmit}>
-            <label style={labelBlock}>Incident Type</label>
-            <select
-              style={inputFull}
-              value={form.incident_type}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, incident_type: e.target.value }))
-              }
-            >
-              <option value="booth_capture">Booth Capture</option>
-              <option value="violence">Violence</option>
-              <option value="suspicious_activity">Suspicious Activity</option>
-            </select>
-
-            <label style={{ ...labelBlock, marginTop: 10 }}>Severity</label>
-            <select
-              style={inputFull}
-              value={form.severity}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, severity: e.target.value }))
-              }
-            >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
-
-            <label style={{ ...labelBlock, marginTop: 10 }}>Latitude</label>
-            <input
-              type="number"
-              step="any"
-              style={inputFull}
-              value={form.latitude}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, latitude: e.target.value }))
-              }
-            />
-
-            <label style={{ ...labelBlock, marginTop: 10 }}>Longitude</label>
-            <input
-              type="number"
-              step="any"
-              style={inputFull}
-              value={form.longitude}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, longitude: e.target.value }))
-              }
-            />
-
-            <label style={{ ...labelBlock, marginTop: 10 }}>Reported By</label>
-            <input
-              type="text"
-              style={inputFull}
-              value={form.reported_by}
-              onChange={(e) =>
-                setForm((f) => ({ ...f, reported_by: e.target.value }))
-              }
-            />
-
-            <button
-              type="submit"
-              disabled={submitting}
-              style={{
-                marginTop: 14,
-                width: "100%",
-                padding: "0.65rem",
-                fontWeight: 600,
-                border: "none",
-                borderRadius: 6,
-                background: submitting ? "#455a64" : "#1565c0",
-                color: "#fff",
-                cursor: submitting ? "not-allowed" : "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 8,
-              }}
-            >
-              {submitting ? (
-                <>
-                  <Loader2
-                    size={18}
-                    style={{ animation: "spin 0.8s linear infinite" }}
-                  />
-                  Reporting…
-                </>
-              ) : (
-                "Report Incident"
-              )}
-            </button>
-          </form>
-        </div>
-      )}
+                <div style={{ fontSize: 12, opacity: 0.9, marginBottom: 4 }}>
+                  {distLabel}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 10 }}>
+                  Assigned officers: {assigned}
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => handleResolve(inc.incident_id)}
+                  style={{
+                    padding: "0.4rem 0.75rem",
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    border: "none",
+                    borderRadius: 6,
+                    background: busy ? "#546e7a" : "#c62828",
+                    color: "#fff",
+                    cursor: busy ? "not-allowed" : "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  {busy ? (
+                    <>
+                      <Loader2
+                        size={14}
+                        style={{ animation: "spin 0.8s linear infinite" }}
+                      />
+                      Resolving…
+                    </>
+                  ) : (
+                    "Resolve"
+                  )}
+                </button>
+              </div>
+            );
+          })
+        )}
+        <style>{`
+          @keyframes spin { to { transform: rotate(360deg); } }
+        `}</style>
+      </div>
     </div>
   );
 }

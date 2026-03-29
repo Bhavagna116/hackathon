@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/auth_service.dart';
+import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({
@@ -17,17 +18,19 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final _officerIdController = TextEditingController();
+  final _identifierController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
+  
   bool _loading = false;
+  bool _obscurePassword = true;
 
   static const Color _navy = Color(0xFF0A2342);
   static const Color _navyDark = Color(0xFF06152B);
 
   @override
   void dispose() {
-    _officerIdController.dispose();
+    _identifierController.dispose();
     _passwordController.dispose();
     super.dispose();
   }
@@ -38,7 +41,7 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = true);
     try {
       await widget.auth.login(
-        _officerIdController.text.trim(),
+        _identifierController.text.trim(),
         _passwordController.text,
       );
       if (!mounted) return;
@@ -56,6 +59,130 @@ class _LoginScreenState extends State<LoginScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  void _showForgotPasswordDialog() {
+    final identCtrl = TextEditingController();
+    final newPassCtrl = TextEditingController();
+    final confPassCtrl = TextEditingController();
+    final formKey = GlobalKey<FormState>();
+    bool resetting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 24,
+                right: 24,
+                top: 24,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+              ),
+              child: Form(
+                key: formKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Reset Password',
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        color: _navy,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: identCtrl,
+                      decoration: _fieldDecoration('Username or Email'),
+                      validator: (v) => v == null || v.isEmpty ? 'Required' : null,
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: newPassCtrl,
+                      obscureText: true,
+                      decoration: _fieldDecoration('New Password'),
+                      validator: (v) {
+                        if (v == null || v.isEmpty) return 'Required';
+                        if (v.length < 8) return 'Min 8 chars required';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: confPassCtrl,
+                      obscureText: true,
+                      decoration: _fieldDecoration('Confirm Password'),
+                      validator: (v) {
+                        if (v == null || v.isEmpty) return 'Required';
+                        if (v != newPassCtrl.text) return 'Passwords do not match';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      height: 48,
+                      child: FilledButton(
+                        onPressed: resetting
+                            ? null
+                            : () async {
+                                if (!formKey.currentState!.validate()) return;
+                                setModalState(() => resetting = true);
+                                try {
+                                  await widget.auth.resetPassword(
+                                    identCtrl.text.trim(),
+                                    newPassCtrl.text,
+                                    confPassCtrl.text,
+                                  );
+                                  if (!mounted) return;
+                                  Navigator.pop(ctx);
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: const Text('Password updated successfully'),
+                                      backgroundColor: Colors.green.shade700,
+                                    ),
+                                  );
+                                } catch (e) {
+                                  final msg = e.toString().replaceFirst('Exception: ', '');
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(msg),
+                                      backgroundColor: Colors.red.shade800,
+                                    ),
+                                  );
+                                  setModalState(() => resetting = false);
+                                }
+                              },
+                        style: FilledButton.styleFrom(
+                          backgroundColor: _navy,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: resetting
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Text('Confirm Reset'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -111,12 +238,12 @@ class _LoginScreenState extends State<LoginScreen> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           TextFormField(
-                            controller: _officerIdController,
+                            controller: _identifierController,
                             textInputAction: TextInputAction.next,
-                            decoration: _fieldDecoration('Officer ID'),
+                            decoration: _fieldDecoration('Username or Email'),
                             validator: (v) {
                               if (v == null || v.trim().isEmpty) {
-                                return 'Enter your officer ID';
+                                return 'Required';
                               }
                               return null;
                             },
@@ -124,11 +251,23 @@ class _LoginScreenState extends State<LoginScreen> {
                           const SizedBox(height: 18),
                           TextFormField(
                             controller: _passwordController,
-                            obscureText: true,
+                            obscureText: _obscurePassword,
                             onFieldSubmitted: (_) {
                               if (!_loading) _submit();
                             },
-                            decoration: _fieldDecoration('Password'),
+                            decoration: _fieldDecoration('Password').copyWith(
+                              suffixIcon: IconButton(
+                                icon: Icon(
+                                  _obscurePassword ? Icons.visibility_off : Icons.visibility,
+                                  color: _navy,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _obscurePassword = !_obscurePassword;
+                                  });
+                                },
+                              ),
+                            ),
                             validator: (v) {
                               if (v == null || v.isEmpty) {
                                 return 'Enter your password';
@@ -136,7 +275,17 @@ class _LoginScreenState extends State<LoginScreen> {
                               return null;
                             },
                           ),
-                          const SizedBox(height: 28),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton(
+                              onPressed: _showForgotPasswordDialog,
+                              child: Text(
+                                'Forgot Password?',
+                                style: TextStyle(color: _navy.withOpacity(0.8)),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
                           SizedBox(
                             height: 48,
                             child: FilledButton(
@@ -170,6 +319,33 @@ class _LoginScreenState extends State<LoginScreen> {
                         ],
                       ),
                     ),
+                  ),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        "Don't have an account?",
+                        style: TextStyle(color: _navy.withOpacity(0.7)),
+                      ),
+                      TextButton(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => SignupScreen(auth: widget.auth),
+                            ),
+                          );
+                        },
+                        child: const Text(
+                          'Sign up',
+                          style: TextStyle(
+                            color: _navy,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),

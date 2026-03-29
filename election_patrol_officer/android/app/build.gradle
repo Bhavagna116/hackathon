@@ -1,9 +1,8 @@
 plugins {
     id "com.android.application"
     id "dev.flutter.flutter-gradle-plugin"
+    id "com.google.gms.google-services"
 }
-
-// TODO: Add google-services.json from Firebase Console (and apply the Google Services Gradle plugin) for FCM on Android.
 
 android {
     namespace "com.example.election_patrol_officer"
@@ -16,7 +15,7 @@ android {
 
     defaultConfig {
         applicationId "com.example.election_patrol_officer"
-        minSdkVersion 21
+        minSdkVersion flutter.minSdkVersion
         targetSdkVersion flutter.targetSdkVersion
         versionCode flutter.versionCode
         versionName flutter.versionName

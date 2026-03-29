@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "199747958637",
+    "project_id": "hackathon-e9bb6",
+    "storage_bucket": "hackathon-e9bb6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:199747958637:android:1420418b7d5173992e8c64",
+        "android_client_info": {
+          "package_name": "com.example.election_patrol_officer"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBVwqsl7x7Wsjet5509hwokeRBA9N9P3lo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

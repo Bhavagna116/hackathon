@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 import '../models/officer_location.dart';
 import 'api_service.dart';
@@ -13,7 +14,7 @@ class LocationService {
   })  : _api = api,
         _storage = storage ?? const FlutterSecureStorage();
 
-  static const _officerIdKey = 'officer_id';
+  static const _uniqueIdKey = 'unique_id';
 
   final ApiService _api;
   final FlutterSecureStorage _storage;
@@ -22,6 +23,7 @@ class LocationService {
       StreamController<Position>.broadcast();
 
   StreamSubscription<Position>? _positionSubscription;
+  IO.Socket? _socket;
 
   AvailabilityStatus _availabilityStatus = AvailabilityStatus.free;
 
@@ -31,8 +33,15 @@ class LocationService {
 
   bool get isTracking => _tracking;
 
-  void setAvailabilityStatus(AvailabilityStatus status) {
+  void setAvailabilityStatus(AvailabilityStatus status) async {
     _availabilityStatus = status;
+    final uniqueId = await _storage.read(key: _uniqueIdKey);
+    if (uniqueId != null && uniqueId.isNotEmpty && _socket != null && _socket!.connected) {
+      _socket!.emit('updateStatus', {
+        'userId': uniqueId,
+        'status': status.name,
+      });
+    }
   }
 
   /// Requests location permission and checks that location services are enabled.
@@ -64,11 +73,16 @@ class LocationService {
       return;
     }
 
+    _socket = IO.io(
+      'http://192.168.0.147:3000',
+      IO.OptionBuilder().setTransports(['websocket']).build(),
+    );
+
     await _positionSubscription?.cancel();
     _positionSubscription = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 3,
+        accuracy: LocationAccuracy.best,
+        distanceFilter: 0,
       ),
     ).listen(
       (Position position) {
@@ -82,27 +96,28 @@ class LocationService {
   }
 
   Future<void> _pushLocation(Position position) async {
-    final officerId = await _storage.read(key: _officerIdKey);
-    if (officerId == null || officerId.isEmpty) return;
+    final uniqueId = await _storage.read(key: _uniqueIdKey);
+    if (uniqueId == null || uniqueId.isEmpty) return;
 
-    final payload = OfficerLocation(
-      officerId: officerId,
-      latitude: position.latitude,
-      longitude: position.longitude,
-      timestamp: DateTime.now().toUtc(),
-      availabilityStatus: _availabilityStatus,
-    );
-
-    try {
-      await _api.updateLocation(payload);
-    } catch (_) {
-      // Non-fatal; next movement will send again.
+    if (_socket != null && _socket!.connected) {
+      _socket!.emit('sendLocation', {
+        'userId': uniqueId,
+        'latitude': position.latitude,
+        'longitude': position.longitude,
+        'availability_status': _availabilityStatus.name,
+        'timestamp': DateTime.now().toUtc().toIso8601String(),
+      });
     }
   }
 
   Future<void> stopTracking() async {
     await _positionSubscription?.cancel();
     _positionSubscription = null;
+    
+    _socket?.disconnect();
+    _socket?.dispose();
+    _socket = null;
+    
     _tracking = false;
   }
 }

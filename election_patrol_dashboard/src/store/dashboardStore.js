@@ -9,30 +9,49 @@ export const useDashboardStore = create((set) => ({
   setOfficers: (officers) => set({ officers }),
 
   updateOfficerLocation: (
-    officer_id,
+    unique_id,
     latitude,
     longitude,
     availability_status,
     timestamp
   ) =>
-    set((state) => ({
-      officers: state.officers.map((o) =>
-        o.officer_id === officer_id
-          ? {
-              ...o,
+    set((state) => {
+      const idx = state.officers.findIndex((o) => o.unique_id === unique_id);
+      if (idx === -1) {
+        return {
+          officers: [
+            ...state.officers,
+            {
+              unique_id,
+              username: "Patrol Officer",
+              rank: "Tracking",
               last_latitude: latitude,
               last_longitude: longitude,
               availability_status,
               last_updated: timestamp,
-            }
-          : o
-      ),
-    })),
+            },
+          ],
+        };
+      }
+      return {
+        officers: state.officers.map((o) =>
+          o.unique_id === unique_id
+            ? {
+                ...o,
+                last_latitude: latitude,
+                last_longitude: longitude,
+                availability_status,
+                last_updated: timestamp,
+              }
+            : o
+        ),
+      };
+    }),
 
   addOfficerOnline: (officerData) =>
     set((state) => {
       const idx = state.officers.findIndex(
-        (o) => o.officer_id === officerData.officer_id
+        (o) => o.unique_id === officerData.unique_id
       );
       if (idx === -1) {
         return { officers: [...state.officers, officerData] };
@@ -42,9 +61,9 @@ export const useDashboardStore = create((set) => ({
       return { officers: next };
     }),
 
-  removeOfficerOffline: (officer_id) =>
+  removeOfficerOffline: (unique_id) =>
     set((state) => ({
-      officers: state.officers.filter((o) => o.officer_id !== officer_id),
+      officers: state.officers.filter((o) => o.unique_id !== unique_id),
     })),
 
   setIncidents: (incidents) => set({ incidents }),

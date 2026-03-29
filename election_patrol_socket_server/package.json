@@ -1,0 +1,15 @@
+{
+  "name": "election_patrol_socket_server",
+  "version": "1.0.0",
+  "description": "Real-time tracking backend for Election Patrol",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.4.1",
+    "socket.io": "^4.7.5"
+  }
+}

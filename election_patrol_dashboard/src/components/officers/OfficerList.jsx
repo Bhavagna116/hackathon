@@ -67,7 +67,7 @@ const listScrollStyle = {
 
 const rowStyle = {
   display: "grid",
-  gridTemplateColumns: "14px 1fr",
+  gridTemplateColumns: "14px 1fr auto",
   gap: "0.5rem",
   alignItems: "start",
   padding: "0.55rem 0.75rem",
@@ -111,10 +111,10 @@ function formatCoords(lat, lng) {
 function mergeOfficers(fetchedList, liveList) {
   const map = new Map();
   for (const o of fetchedList) {
-    map.set(o.officer_id, { ...o });
+    map.set(o.unique_id, { ...o });
   }
   for (const o of liveList) {
-    const id = o.officer_id;
+    const id = o.unique_id;
     const prev = map.get(id);
     if (prev) {
       map.set(id, { ...prev, ...o });
@@ -135,7 +135,15 @@ export default function OfficerList() {
     (async () => {
       try {
         const { data } = await officersApi.getAllOfficers();
-        if (!cancelled) setFetchedOfficers(Array.isArray(data) ? data : []);
+        if (!cancelled) {
+          if (Array.isArray(data)) {
+            setFetchedOfficers(data);
+            const store = useDashboardStore.getState();
+            data.forEach((o) => store.addOfficerOnline(o));
+          } else {
+            setFetchedOfficers([]);
+          }
+        }
       } catch (err) {
         const d = err.response?.data?.detail;
         toast.error(
@@ -177,7 +185,6 @@ export default function OfficerList() {
         {[
           ["all", "All"],
           ["free", "Free"],
-          ["busy", "Busy"],
           ["assigned", "Assigned"],
         ].map(([key, label]) => (
           <button
@@ -220,7 +227,7 @@ export default function OfficerList() {
             const timeLabel = lu ? format(lu, "HH:mm:ss") : "Never";
 
             return (
-              <div key={o.officer_id} style={rowStyle}>
+              <div key={o.unique_id} style={rowStyle}>
                 <span
                   title={st}
                   style={{
@@ -244,6 +251,9 @@ export default function OfficerList() {
                       · {o.rank}
                     </span>
                   </div>
+                  <div style={{ opacity: 0.7, fontFamily: "monospace", marginTop: 2 }}>
+                    ID: {o.unique_id}
+                  </div>
                   <div style={{ opacity: 0.8, marginTop: 2 }}>{timeLabel}</div>
                   <div
                     style={{
@@ -255,6 +265,28 @@ export default function OfficerList() {
                     {formatCoords(o.last_latitude, o.last_longitude)}
                   </div>
                 </div>
+                {o.mobile_number ? (
+                  <a
+                    href={`tel:${o.mobile_number}`}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      background: "rgba(46,125,50,0.2)",
+                      color: "#81c784",
+                      padding: "6px 10px",
+                      borderRadius: 6,
+                      textDecoration: "none",
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      border: "1px solid rgba(46,125,50,0.4)",
+                      marginTop: 2,
+                    }}
+                    title={`Call ${o.username}`}
+                  >
+                    Call
+                  </a>
+                ) : <div />}
               </div>
             );
           })

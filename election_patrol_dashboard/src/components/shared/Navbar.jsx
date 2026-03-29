@@ -1,6 +1,5 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router-dom";
-import { LogOut, Shield } from "lucide-react";
+import { Shield } from "lucide-react";
 
 import { useAuthStore } from "../../store/authStore";
 import { useDashboardStore } from "../../store/dashboardStore";
@@ -47,9 +46,6 @@ const logoutStyle = {
 };
 
 export default function Navbar() {
-  const navigate = useNavigate();
-  const officer = useAuthStore((s) => s.officer);
-  const logout = useAuthStore((s) => s.logout);
   const incidents = useDashboardStore((s) => s.incidents);
 
   const hasActiveIncidents = useMemo(
@@ -62,13 +58,8 @@ export default function Navbar() {
     [incidents]
   );
 
-  function handleLogout() {
-    logout();
-    navigate("/login", { replace: true });
-  }
-
-  const username = officer?.username ?? "—";
-  const rank = officer?.rank ?? "";
+  const username = "Dashboard Admin";
+  const rank = "Administrator";
 
   return (
     <header style={barStyle}>
@@ -86,10 +77,6 @@ export default function Navbar() {
             <span style={{ opacity: 0.85 }}> · {rank}</span>
           ) : null}
         </span>
-        <button type="button" style={logoutStyle} onClick={handleLogout}>
-          <LogOut size={16} aria-hidden />
-          Logout
-        </button>
       </div>
     </header>
   );

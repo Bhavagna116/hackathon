@@ -3,16 +3,55 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class OfficerRegister(BaseModel):
+    name: str
     username: str
-    email: Optional[EmailStr] = None
-    password: str = Field(..., min_length=6)
-    rank: str = "Officer"
-    mobile_number: str = "0000000000"
-    full_name: Optional[str] = None
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+    confirm_password: str
+    mobile_number: str
+
+    @model_validator(mode="after")
+    def check_passwords_match(self) -> "OfficerRegister":
+        if self.password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        
+        pw = self.password
+        if not any(char.isupper() for char in pw):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(char.islower() for char in pw):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(char.isdigit() for char in pw):
+            raise ValueError("Password must contain at least one number")
+        special_chars = set("!@#$%^&*()-_=+[]{}|;:',.<>?/")
+        if not any(char in special_chars for char in pw):
+            raise ValueError("Password must contain at least one special character")
+        return self
+
+class OfficerPasswordReset(BaseModel):
+    identifier: str  # Either email or username
+    new_password: str = Field(..., min_length=8)
+    confirm_password: str
+
+    @model_validator(mode="after")
+    def check_passwords_match(self) -> "OfficerPasswordReset":
+        if self.new_password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        
+        pw = self.new_password
+        if not any(char.isupper() for char in pw):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(char.islower() for char in pw):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(char.isdigit() for char in pw):
+            raise ValueError("Password must contain at least one number")
+        special_chars = set("!@#$%^&*()-_=+[]{}|;:',.<>?/")
+        if not any(char in special_chars for char in pw):
+            raise ValueError("Password must contain at least one special character")
+        return self
 
 
 class OfficerLogin(BaseModel):
@@ -21,7 +60,7 @@ class OfficerLogin(BaseModel):
 
 
 class OfficerResponse(BaseModel):
-    officer_id: str
+    unique_id: str
     username: str
     email: EmailStr
     rank: str
@@ -33,16 +72,6 @@ class OfficerResponse(BaseModel):
     last_longitude: Optional[float] = None
     last_updated: Optional[datetime] = None
     created_at: datetime
-
-
-class LocationUpdate(BaseModel):
-    latitude: float
-    longitude: float
-    timestamp: datetime
-
-
-class StatusUpdate(BaseModel):
-    status: str
 
 
 class FCMTokenUpdate(BaseModel):

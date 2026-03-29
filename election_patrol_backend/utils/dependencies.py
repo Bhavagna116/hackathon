@@ -12,15 +12,15 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 async def get_current_officer(token: str = Depends(oauth2_scheme)) -> dict[str, Any]:
     payload = decode_access_token(token)
-    officer_id = payload.get("officer_id")
-    if officer_id is None:
+    unique_id = payload.get("unique_id")
+    if unique_id is None:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
     await ensure_db_connected()
-    if db.officers_collection is None:
+    if db.officers_auth_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    doc = await db.officers_collection.find_one({"officer_id": officer_id})
+    doc = await db.officers_auth_collection.find_one({"unique_id": unique_id})
     if doc is None:
         raise HTTPException(status_code=401, detail="Officer not found")
 

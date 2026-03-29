@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import random
+import string
 import uuid
 from datetime import datetime
 from typing import Any
@@ -8,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 import database.connection as db
 from database.connection import ensure_db_connected
-from schemas.officer import OfficerLogin, OfficerRegister, OfficerResponse
+from schemas.officer import OfficerLogin, OfficerRegister, OfficerResponse, OfficerPasswordReset
 from utils.auth_utils import create_access_token, hash_password, verify_password
 from utils.dependencies import get_current_officer
 
@@ -22,7 +25,7 @@ def _default_email(username: str) -> str:
 
 def _doc_to_officer_response(doc: dict[str, Any]) -> OfficerResponse:
     return OfficerResponse(
-        officer_id=doc["officer_id"],
+        unique_id=doc["unique_id"],
         username=doc["username"],
         email=doc["email"],
         rank=doc["rank"],
@@ -40,49 +43,49 @@ def _doc_to_officer_response(doc: dict[str, Any]) -> OfficerResponse:
 @router.post("/register", response_model=OfficerResponse)
 async def register(body: OfficerRegister) -> OfficerResponse:
     await ensure_db_connected()
-    if db.officers_collection is None:
+    if db.officers_auth_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    existing_username = await db.officers_collection.find_one({"username": body.username})
+    existing_username = await db.officers_auth_collection.find_one({"username": body.username})
     if existing_username is not None:
         raise HTTPException(status_code=400, detail="Username already taken")
 
-    resolved_email = str(body.email) if body.email is not None else _default_email(body.username)
-    existing_email = await db.officers_collection.find_one({"email": resolved_email})
+    existing_email = await db.officers_auth_collection.find_one({"email": body.email})
     if existing_email is not None:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    officer_id = str(uuid.uuid4())
+    generated_unique_id = ''.join(random.choices(string.ascii_letters + string.digits, k=11))
+
     created_at = datetime.utcnow()
-    display_name = (body.full_name or "").strip() or body.username
 
     doc: dict[str, Any] = {
-        "officer_id": officer_id,
+        "unique_id": generated_unique_id,
         "username": body.username,
-        "email": resolved_email,
-        "rank": body.rank,
+        "email": body.email,
+        "rank": "Officer",
         "mobile_number": body.mobile_number,
-        "full_name": display_name,
+        "full_name": body.name,
         "password_hash": hash_password(body.password),
         "fcm_token": None,
-        "availability_status": "free",
-        "last_latitude": None,
-        "last_longitude": None,
-        "last_updated": None,
         "created_at": created_at,
     }
 
-    await db.officers_collection.insert_one(doc)
+    await db.officers_auth_collection.insert_one(doc)
     return _doc_to_officer_response(doc)
 
 
 @router.post("/login")
 async def login(body: OfficerLogin) -> dict[str, Any]:
     await ensure_db_connected()
-    if db.officers_collection is None:
+    if db.officers_auth_collection is None:
         raise HTTPException(status_code=503, detail="Database not available")
 
-    officer = await db.officers_collection.find_one({"username": body.username})
+    officer = await db.officers_auth_collection.find_one({
+        "$or": [
+            {"username": body.username},
+            {"email": body.username}
+        ]
+    })
     if officer is None:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -91,7 +94,7 @@ async def login(body: OfficerLogin) -> dict[str, Any]:
 
     token = create_access_token(
         {
-            "officer_id": officer["officer_id"],
+            "unique_id": officer["unique_id"],
             "username": officer["username"],
             "rank": officer["rank"],
         }
@@ -107,3 +110,27 @@ async def login(body: OfficerLogin) -> dict[str, Any]:
 @router.get("/me", response_model=OfficerResponse)
 async def me(current: dict = Depends(get_current_officer)) -> OfficerResponse:
     return _doc_to_officer_response(current)
+
+@router.post("/reset-password")
+async def reset_password(body: OfficerPasswordReset) -> dict[str, str]:
+    await ensure_db_connected()
+    if db.officers_auth_collection is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+
+    officer = await db.officers_auth_collection.find_one({
+        "$or": [
+            {"username": body.identifier},
+            {"email": body.identifier}
+        ]
+    })
+    
+    if officer is None:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    new_hash = hash_password(body.new_password)
+    await db.officers_auth_collection.update_one(
+        {"_id": officer["_id"]},
+        {"$set": {"password_hash": new_hash}}
+    )
+    
+    return {"message": "Password updated successfully"}

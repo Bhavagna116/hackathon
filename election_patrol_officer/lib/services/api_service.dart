@@ -46,14 +46,6 @@ class ApiService {
     );
   }
 
-  Future<void> updateLocation(OfficerLocation location) async {
-    await _dio.post<void>('/officers/location', data: location.toJson());
-  }
-
-  Future<void> updateStatus(String status) async {
-    await _dio.post<void>('/officers/status', data: <String, dynamic>{'status': status});
-  }
-
   Future<void> registerFcmToken(String fcmToken) async {
     await _dio.post<void>(
       '/officers/fcm-token',

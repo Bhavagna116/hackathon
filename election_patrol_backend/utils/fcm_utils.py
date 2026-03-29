@@ -40,9 +40,47 @@ def _build_data_payload(incident: dict[str, Any]) -> dict[str, str]:
 
 
 def _send_sync(fcm_token: str, data: dict[str, str]) -> bool:
-    message = messaging.Message(data=data, token=fcm_token)
+    # High-priority alert with sound
+    notification = messaging.Notification(
+        title="🚨 EMERGENCY ALERT",
+        body=data.get("message", "High-priority incident assigned!"),
+    )
+    
+    # Priority 'high' + sound='default' + channel_id ensures 'Heads-up' notification with sound
+    android_config = messaging.AndroidConfig(
+        priority='high',
+        notification=messaging.AndroidNotification(
+            sound='default',
+            channel_id='emergency_alerts',
+            click_action='FLUTTER_NOTIFICATION_CLICK',
+            notification_priority='PRIORITY_MAX',
+            vibrate_timings_millis=[0, 500, 200, 500],
+            default_sound=True,
+            default_vibrate_timings=True,
+        ),
+    )
+
+    # For iOS screens to light up and play sound
+    apns_config = messaging.APNSConfig(
+        payload=messaging.APNSPayload(
+            aps=messaging.Aps(
+                sound='default',
+                badge=1,
+                content_available=True,
+            ),
+        ),
+    )
+
+    message = messaging.Message(
+        notification=notification,
+        data=data,
+        token=fcm_token,
+        android=android_config,
+        apns=apns_config
+    )
     messaging.send(message)
     return True
+
 
 
 async def send_incident_alert(fcm_token: str, incident: dict[str, Any]) -> bool:

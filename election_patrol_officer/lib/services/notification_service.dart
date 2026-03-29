@@ -3,10 +3,12 @@ import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 import '../models/incident_alert.dart';
 import '../screens/alert_screen.dart';
 import 'api_service.dart';
+import 'location_service.dart';
 
 /// Must be a top-level function for [FirebaseMessaging.onBackgroundMessage].
 @pragma('vm:entry-point')
@@ -17,7 +19,10 @@ Future<void> firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
 class NotificationService {
   static ApiService? _api;
+  static LocationService? _location;
   static GlobalKey<NavigatorState>? _navigatorKey;
+  static final AudioPlayer _player = AudioPlayer();
+  static bool _isAlarming = false;
 
   static final ValueNotifier<List<IncidentAlert>> recentAlerts =
       ValueNotifier<List<IncidentAlert>>(<IncidentAlert>[]);
@@ -30,8 +35,29 @@ class NotificationService {
 
   static Future<String?> getFcmToken() => FirebaseMessaging.instance.getToken();
 
+  static void stopAlarm() {
+    if (_isAlarming) {
+      _player.stop();
+      _isAlarming = false;
+    }
+  }
+
+  static Future<void> startAlarm() async {
+    if (_isAlarming) return;
+    _isAlarming = true;
+    try {
+      await _player.setReleaseMode(ReleaseMode.loop);
+      // Play a standard siren/alarm sound from a public URL for zero-setup testing
+      // In production, this would be a local asset
+      await _player.play(UrlSource('https://actions.google.com/sounds/v1/alarms/alarm_clock.ogg'));
+    } catch (e) {
+      debugPrint("Error playing alarm: $e");
+    }
+  }
+
   static void markAlertsRead() {
     unreadCount.value = 0;
+    stopAlarm();
   }
 
   static Future<void> _cancelSubscriptions() async {
@@ -47,7 +73,9 @@ class NotificationService {
   static Future<void> reset() async {
     await _cancelSubscriptions();
     _api = null;
+    _location = null;
     _navigatorKey = null;
+    stopAlarm();
     recentAlerts.value = <IncidentAlert>[];
     unreadCount.value = 0;
   }
@@ -72,12 +100,14 @@ class NotificationService {
   }
 
   static void _navigateToAlert(IncidentAlert alert) {
+    stopAlarm();
     final nav = _navigatorKey?.currentState;
     final api = _api;
-    if (nav == null || api == null) return;
+    final location = _location;
+    if (nav == null || api == null || location == null) return;
     nav.push<void>(
       MaterialPageRoute<void>(
-        builder: (BuildContext context) => AlertScreen(alert: alert, api: api),
+        builder: (BuildContext context) => AlertScreen(alert: alert, api: api, location: location),
       ),
     );
   }
@@ -129,10 +159,12 @@ class NotificationService {
 
   static Future<void> init({
     required ApiService api,
+    required LocationService location,
     required GlobalKey<NavigatorState> navigatorKey,
   }) async {
     await _cancelSubscriptions();
     _api = api;
+    _location = location;
     _navigatorKey = navigatorKey;
 
     await FirebaseMessaging.instance.requestPermission();
@@ -156,6 +188,9 @@ class NotificationService {
       final alert = _tryParseAlert(Map<String, dynamic>.from(message.data));
       if (alert == null) return;
       _recordAlert(alert);
+      if (alert.severity == IncidentSeverity.high) {
+        startAlarm();
+      }
       _showForegroundDialog(alert);
     });
 
